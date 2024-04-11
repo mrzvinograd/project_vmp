@@ -12,4 +12,3 @@ class Playlist:
 
     def clear(self):
         self.tracks = []
-# wad

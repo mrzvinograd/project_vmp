@@ -329,7 +329,7 @@ class AudioPlayer:
                 self.root.after(0, self.update_timeline_slider, current_pos, length)
             time.sleep(0.5)
 
-# Лагает если использовать отображение в real time
+# Лагает если использовать отображение в real time (unluck)
 #    def update_timeline_slider(self, current_pos, length):
 #        self.timeline_slider.set(current_pos / length * 100)
 #        self.current_time_label.config(text=self.format_time(current_pos))

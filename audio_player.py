@@ -5,7 +5,27 @@ from tkinter import filedialog, messagebox, simpledialog
 from mutagen.easyid3 import EasyID3
 import tkinter as tk
 from tkinter import ttk
-from playlist import Playlist
+import threading
+import time
+
+# Уменьшаем размер буфера
+pygame.mixer.pre_init(44100, -16, 2, 512)
+pygame.mixer.init()
+pygame.init()
+
+class Playlist:
+    def __init__(self, name):
+        self.name = name
+        self.tracks = []
+
+    def add_track(self, track):
+        self.tracks.append(track)
+
+    def remove_track(self, track):
+        self.tracks.remove(track)
+
+    def clear(self):
+        self.tracks = []
 
 class AudioPlayer:
     def __init__(self, root):
@@ -13,7 +33,7 @@ class AudioPlayer:
         self.root.title("Simple Audio Player")
         self.root.geometry("800x600")
 
-        self.root.configure(bg="#f0f0f0")  # Background color
+        self.root.configure(bg="#f0f0f0")
         self.playlists = {}
         self.current_playlist = None
         self.current_track = None
@@ -24,9 +44,11 @@ class AudioPlayer:
         self.create_widgets()
         self.load_playlists()
 
+        self.timeline_thread = None
+        self.stop_timeline_thread = False
+
     def create_widgets(self):
-        # Create control buttons
-        button_frame = tk.Frame(self.root, bg="#f0f0f0")  # Background color
+        button_frame = tk.Frame(self.root, bg="#f0f0f0")
         button_frame.pack(pady=10)
 
         self.play_button = tk.Button(button_frame, text="▶ Play", command=self.play_pause, bg="lightgreen", font=("Arial", 12, "bold"))
@@ -47,28 +69,26 @@ class AudioPlayer:
         self.repeat_track_button = tk.Button(button_frame, text="🔂 Repeat Track", command=self.toggle_repeat_track, bg="lightgrey", font=("Arial", 12))
         self.repeat_track_button.grid(row=0, column=5, padx=5)
 
-        # Volume control
-        volume_frame = tk.LabelFrame(self.root, text="Volume", font=("Arial", 12), bg="#f0f0f0")  # Background color
+        volume_frame = tk.LabelFrame(self.root, text="Volume", font=("Arial", 12), bg="#f0f0f0")
         volume_frame.pack(fill="x", padx=10, pady=(0,10))
 
         self.volume_slider = tk.Scale(volume_frame, from_=0, to=100, orient=tk.HORIZONTAL, command=self.set_volume)
-        self.volume_slider.set(10)  # Set default volume to 10%
+        self.volume_slider.set(10)
         self.volume_slider.pack(fill="x", padx=10, pady=10)
 
-        # Speed control
-        speed_frame = tk.LabelFrame(self.root, text="Speed", font=("Arial", 12), bg="#f0f0f0")
-        speed_frame.pack(fill="x", padx=10, pady=(0,10))
+        timeline_frame = tk.LabelFrame(self.root, text="Timeline", font=("Arial", 12), bg="#f0f0f0")
+        timeline_frame.pack(fill="x", padx=10, pady=(0,10))
 
-        self.speed_slider = tk.Scale(speed_frame, from_=0.5, to=2.0, resolution=0.1, orient=tk.HORIZONTAL, command=self.set_speed)
-        self.speed_slider.set(1.0)
-        self.speed_slider.pack(fill="x", padx=10, pady=10)
+        self.current_time_label = tk.Label(timeline_frame, text="00:00", font=("Arial", 12), bg="#f0f0f0")
+        self.current_time_label.pack(side=tk.LEFT, padx=10)
 
-        # Timeline (Not work)
-        self.timeline = ttk.Scale(self.root, from_=0, to=100, orient=tk.HORIZONTAL, command=self.set_position)
-        self.timeline.pack(fill="x", padx=10, pady=10)
+        self.timeline_slider = tk.Scale(timeline_frame, from_=0, to=100, orient=tk.HORIZONTAL, command=self.set_position)
+        self.timeline_slider.pack(side=tk.LEFT, fill="x", expand=True, padx=10, pady=10)
 
-        # Playlist manipulation buttons
-        playlist_button_frame = tk.Frame(self.root, bg="#f0f0f0")  # Background color
+        self.total_time_label = tk.Label(timeline_frame, text="00:00", font=("Arial", 12), bg="#f0f0f0")
+        self.total_time_label.pack(side=tk.RIGHT, padx=10)
+
+        playlist_button_frame = tk.Frame(self.root, bg="#f0f0f0")
         playlist_button_frame.pack(pady=5)
 
         self.add_button = tk.Button(playlist_button_frame, text="➕ Add to Playlist", command=self.add_to_playlist, bg="lightgrey", font=("Arial", 12))
@@ -89,8 +109,7 @@ class AudioPlayer:
         self.remove_track_button = tk.Button(playlist_button_frame, text="❌ Remove Track", command=self.remove_track_from_playlist, bg="lightgrey", font=("Arial", 12))
         self.remove_track_button.grid(row=0, column=5, padx=5)
 
-        # Search entry and button
-        search_frame = tk.Frame(self.root, bg="#f0f0f0")  # Background color
+        search_frame = tk.Frame(self.root, bg="#f0f0f0")
         search_frame.pack(pady=5)
 
         self.search_entry = tk.Entry(search_frame, width=30, font=("Arial", 12))
@@ -99,12 +118,10 @@ class AudioPlayer:
         self.search_button = tk.Button(search_frame, text="🔍 Search", command=self.search_tracks, bg="lightgrey", font=("Arial", 12))
         self.search_button.grid(row=0, column=1, padx=5)
 
-        # Track info button
         self.track_info_button = tk.Button(self.root, text="ℹ Track Info", command=self.display_track_info, bg="lightgrey", font=("Arial", 12))
         self.track_info_button.pack(pady=5)
 
-        # Playlist listbox
-        playlist_frame = tk.LabelFrame(self.root, text="Playlist", font=("Arial", 12), bg="#f0f0f0")  # Background color
+        playlist_frame = tk.LabelFrame(self.root, text="Playlist", font=("Arial", 12), bg="#f0f0f0")
         playlist_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
         self.playlist_listbox = tk.Listbox(playlist_frame, width=100, height=20, font=("Arial", 12))
@@ -133,39 +150,39 @@ class AudioPlayer:
             if self.paused:
                 pygame.mixer.music.unpause()
                 self.paused = False
+                self.play_button.config(text="⏸ Pause")
             else:
                 pygame.mixer.music.pause()
                 self.paused = True
+                self.play_button.config(text="▶ Play")
         else:
             if self.current_playlist and self.current_playlist.tracks:
                 self.play_track(0)
+                self.play_button.config(text="⏸ Pause")
 
     def stop(self):
         pygame.mixer.music.stop()
         self.current_track = None
+        self.timeline_slider.set(0)
+        self.current_time_label.config(text="00:00")
+        self.total_time_label.config(text="00:00")
+        self.play_button.config(text="▶ Play")
+        self.stop_timeline_thread = True
 
     def set_volume(self, volume):
         pygame.mixer.music.set_volume(int(volume) / 100)
 
     def add_to_playlist(self):
-        if not self.current_playlist:
-            messagebox.showwarning("Warning", "Please select a playlist or create a new one.")
-            return
-        file_path = filedialog.askopenfilename(filetypes=[
-            ("Audio Files", "*.mp3;*.wav;*.ogg"),
-            ("MP3 Files", "*.mp3"),
-            ("WAV Files", "*.wav"),
-            ("OGG Files", "*.ogg")
-        ])
+        file_path = filedialog.askopenfilename(filetypes=[("MP3 files", "*.mp3")])
         if file_path:
             self.current_playlist.add_track(file_path)
             self.update_playlist()
 
     def create_playlist(self):
-        name = simpledialog.askstring("Create Playlist", "Enter playlist name:")
+        name = simpledialog.askstring("Playlist Name", "Enter a name for the new playlist:")
         if name:
             if name in self.playlists:
-                messagebox.showwarning("Warning", "Playlist with this name already exists.")
+                messagebox.showerror("Error", f"A playlist with the name '{name}' already exists.")
             else:
                 self.playlists[name] = Playlist(name)
                 self.current_playlist = self.playlists[name]
@@ -178,8 +195,10 @@ class AudioPlayer:
         file_path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON files", "*.json")])
         if file_path:
             with open(file_path, "w") as f:
-                playlist_data = {"name": self.current_playlist.name, "tracks": self.current_playlist.tracks}
-                json.dump(playlist_data, f)
+                json.dump({
+                    "name": self.current_playlist.name,
+                    "tracks": self.current_playlist.tracks
+                }, f)
 
     def load_playlist(self):
         file_path = filedialog.askopenfilename(filetypes=[("JSON files", "*.json")])
@@ -271,8 +290,13 @@ class AudioPlayer:
             pygame.mixer.music.load(track)
             pygame.mixer.music.play()
             self.current_track = index
+            self.timeline_slider.set(0)
+            self.play_button.config(text="⏸ Pause")
+            self.start_timeline_update()
         except pygame.error:
             messagebox.showerror("Error", "Cannot play the selected track.")
+        else:
+            self.update_track_info()
 
     def toggle_repeat_playlist(self):
         self.repeat_playlist = not self.repeat_playlist
@@ -280,11 +304,46 @@ class AudioPlayer:
     def toggle_repeat_track(self):
         self.repeat_track = not self.repeat_track
 
-    def set_speed(self, speed):
-        speed = float(speed)
-        pygame.mixer.music.set_speed(speed)
-
     def set_position(self, position):
-        position = float(position)
-        length = pygame.mixer.Sound(self.current_playlist.tracks[self.current_track]).get_length()
-        pygame.mixer.music.set_pos(position * length / 100)
+        if self.current_track is not None:
+            track = self.current_playlist.tracks[self.current_track]
+            length = pygame.mixer.Sound(track).get_length()
+            new_pos = float(position) * length / 100
+            pygame.mixer.music.set_pos(new_pos)
+            self.update_timeline_slider(new_pos, length)
+
+    def start_timeline_update(self):
+        if self.timeline_thread is not None:
+            self.stop_timeline_thread = True
+            self.timeline_thread.join()
+        self.stop_timeline_thread = False
+        self.timeline_thread = threading.Thread(target=self.track_time_update)
+        self.timeline_thread.start()
+
+    def track_time_update(self):
+        while not self.stop_timeline_thread:
+            if self.current_track is not None and not self.paused:
+                track = self.current_playlist.tracks[self.current_track]
+                length = pygame.mixer.Sound(track).get_length()
+                current_pos = pygame.mixer.music.get_pos() / 1000  # get_pos() returns milliseconds
+                self.root.after(0, self.update_timeline_slider, current_pos, length)
+            time.sleep(0.5)
+
+# Лагает если использовать отображение в real time
+#    def update_timeline_slider(self, current_pos, length):
+#        self.timeline_slider.set(current_pos / length * 100)
+#        self.current_time_label.config(text=self.format_time(current_pos))
+#        self.total_time_label.config(text=self.format_time(length))
+
+    def update_track_info(self):
+        if self.current_track is not None:
+            track = self.current_playlist.tracks[self.current_track]
+            length = pygame.mixer.Sound(track).get_length()
+            self.total_time_label.config(text=self.format_time(length))
+            self.current_time_label.config(text="00:00")
+
+    @staticmethod
+    def format_time(seconds):
+        minutes = int(seconds // 60)
+        seconds = int(seconds % 60)
+        return f"{minutes:02}:{seconds:02}"
